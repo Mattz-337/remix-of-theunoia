@@ -1,0 +1,761 @@
+import { useState } from 'react';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { supabase } from '@/integrations/supabase/client';
+import { useAuth } from '@/contexts/AuthContext';
+import ReactQuill from "react-quill";
+import "react-quill/dist/quill.snow.css";
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Textarea } from '@/components/ui/textarea';
+import { Label } from '@/components/ui/label';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Badge } from '@/components/ui/badge';
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from '@/components/ui/dialog';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from '@/components/ui/alert-dialog';
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
+import { Skeleton } from '@/components/ui/skeleton';
+import { Plus, Pencil, Trash2, Eye, FileText } from 'lucide-react';
+import { toast } from 'sonner';
+import { format } from 'date-fns';
+import { BlogImageUploader } from '@/components/BlogImageUploader';
+import { cn } from '@/lib/utils';
+
+interface Blog {
+  id: string;
+  title: string;
+  slug: string;
+  excerpt: string | null;
+  content: string;
+  cover_image_url: string | null;
+  blog_images: string[] | null;
+  author_id: string;
+  status: string;
+  published_at: string | null;
+  created_at: string;
+  updated_at: string;
+   meta_title: string | null;
+  meta_description: string | null;
+  canonical_url: string | null;
+  faqs: Array<{ question: string; answer: string }> | null;
+}
+
+interface BlogFormData {
+  title: string;
+  slug: string;
+  excerpt: string;
+  content: string;
+  cover_image_url: string;
+  blog_images: string[];
+  meta_title: string;
+  meta_description: string;
+  canonical_url: string;
+  status: string;
+  faqs: Array<{ question: string; answer: string }>;
+}
+const initialFormData: BlogFormData = {
+  title: '',
+  slug: '',
+  excerpt: '',
+  content: '',
+  cover_image_url: '',
+  blog_images: [],
+
+  meta_title: '',
+  meta_description: '',
+  canonical_url: '',
+  status: 'draft',
+  faqs: [],
+};
+
+
+const AdminBlogsPage = () => {
+  const { user } = useAuth();
+  const queryClient = useQueryClient();
+  const [isDialogOpen, setIsDialogOpen] = useState(false);
+  const [editingBlog, setEditingBlog] = useState<Blog | null>(null);
+  const [formData, setFormData] = useState<BlogFormData>(initialFormData);
+  const [faqEnabled, setFaqEnabled] = useState(false);
+  const [currentFaqIndex, setCurrentFaqIndex] = useState(0);
+
+  const { data: blogs, isLoading } = useQuery({
+    queryKey: ['admin-blogs'],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from('blogs')
+        .select('*')
+        .order('created_at', { ascending: false });
+      
+      if (error) throw error;
+      return data as Blog[];
+    },
+  });
+
+  const createBlogMutation = useMutation({
+    mutationFn: async (data: BlogFormData) => {
+      const { error } = await supabase.from('blogs').insert({
+        ...data,
+        author_id: user?.id,
+        published_at: data.status === 'published' ? new Date().toISOString() : null,
+      });
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['admin-blogs'] });
+      toast.success('Blog created successfully');
+      setIsDialogOpen(false);
+      setFormData(initialFormData);
+    },
+    onError: (error: Error) => {
+      toast.error(error.message);
+    },
+  });
+
+  const updateBlogMutation = useMutation({
+    mutationFn: async ({ id, data }: { id: string; data: BlogFormData }) => {
+      const updateData: Record<string, unknown> = { ...data };
+      
+      // Set published_at when publishing for the first time
+      if (data.status === 'published' && editingBlog?.status !== 'published') {
+        updateData.published_at = new Date().toISOString();
+      }
+      
+      const { error } = await supabase
+        .from('blogs')
+        .update(updateData)
+        .eq('id', id);
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['admin-blogs'] });
+      toast.success('Blog updated successfully');
+      setIsDialogOpen(false);
+      setEditingBlog(null);
+      setFormData(initialFormData);
+    },
+    onError: (error: Error) => {
+      toast.error(error.message);
+    },
+  });
+
+  const deleteBlogMutation = useMutation({
+    mutationFn: async (id: string) => {
+      const { error } = await supabase.from('blogs').delete().eq('id', id);
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['admin-blogs'] });
+      toast.success('Blog deleted successfully');
+    },
+    onError: (error: Error) => {
+      toast.error(error.message);
+    },
+  });
+
+  const handleOpenDialog = (blog?: Blog) => {
+
+  if (blog) {
+
+    setEditingBlog(blog);
+
+    setFormData({
+      title: blog.title || '',
+      slug: blog.slug || '',
+      excerpt: blog.excerpt || '',
+      content: blog.content || '',
+      cover_image_url: blog.cover_image_url || '',
+      blog_images: blog.blog_images || [],
+      meta_title: blog.meta_title || '',
+      meta_description: blog.meta_description || '',
+      canonical_url: blog.canonical_url || '',
+      status: blog.status || 'draft',
+      faqs: blog.faqs || [],
+    });
+    setFaqEnabled(Array.isArray(blog.faqs) && blog.faqs.length > 0);
+    setCurrentFaqIndex(0);
+
+  }
+
+  else {
+    setEditingBlog(null);
+    setFormData(initialFormData);
+    setFaqEnabled(false);
+    setCurrentFaqIndex(0);
+  }
+
+  setIsDialogOpen(true);
+
+};
+
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    
+    if (!formData.title || !formData.slug || !formData.content) {
+      toast.error('Please fill in all required fields');
+      return;
+    }
+
+    const submitData: BlogFormData = {
+      ...formData,
+      faqs: faqEnabled
+        ? formData.faqs.filter(
+            (faq) =>
+              faq.question.trim() &&
+              faq.answer.trim() &&
+              faq.answer !== '<p><br></p>'
+          )
+        : [],
+    };
+
+    if (editingBlog) {
+      updateBlogMutation.mutate({ id: editingBlog.id, data: submitData });
+    } else {
+      createBlogMutation.mutate(submitData);
+    }
+  };
+
+  const generateSlug = (title: string) => {
+    return title
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/(^-|-$)/g, '');
+  };
+
+  const handleTitleChange = (title: string) => {
+    setFormData(prev => ({
+      ...prev,
+      title,
+      slug: prev.slug || generateSlug(title),
+    }));
+  };
+
+  return (
+    <div className="space-y-6">
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-3xl font-bold text-foreground">Blog Management</h1>
+          <p className="text-muted-foreground mt-1">Create and manage blog posts</p>
+        </div>
+        <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
+          <DialogTrigger asChild>
+            <Button onClick={() => handleOpenDialog()}>
+              <Plus className="mr-2 h-4 w-4" />
+              New Blog Post
+            </Button>
+          </DialogTrigger>
+          <DialogContent className="max-w-3xl h-[90vh] overflow-y-scroll">
+            <DialogHeader>
+              <DialogTitle>
+                {editingBlog ? 'Edit Blog Post' : 'Create New Blog Post'}
+              </DialogTitle>
+            </DialogHeader>
+            <form onSubmit={handleSubmit} className="space-y-4 pb-20">
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <Label htmlFor="title">Title *</Label>
+                  <Input
+                    id="title"
+                    value={formData.title}
+                    onChange={(e) => handleTitleChange(e.target.value)}
+                    placeholder="Enter blog title"
+                    required
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="slug">Slug *</Label>
+                  <Input
+                    id="slug"
+                    value={formData.slug}
+                    onChange={(e) => setFormData(prev => ({ ...prev, slug: e.target.value }))}
+                    placeholder="blog-post-url-slug"
+                    required
+                  />
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                <Label htmlFor="excerpt">Excerpt</Label>
+                <Textarea
+                  id="excerpt"
+                  value={formData.excerpt}
+                  onChange={(e) => setFormData(prev => ({ ...prev, excerpt: e.target.value }))}
+                  placeholder="Brief description of the blog post..."
+                  rows={2}
+                />
+              </div>
+
+              <div className="space-y-2">
+  <Label>Content *</Label>
+<ReactQuill
+  theme="snow"
+  value={formData.content}
+  onChange={(value) =>
+    setFormData(prev => ({ ...prev, content: value }))
+  }
+  modules={{
+    toolbar: [
+      [{ header: [1, 2, 3, false] }],
+      ["bold", "italic", "underline"],
+      [{ list: "ordered" }, { list: "bullet" }],
+      ["link"],
+      ["clean"]
+    ]
+  }}
+  formats={[
+    "header",
+    "bold",
+    "italic",
+    "underline",
+    "list",
+    "bullet",
+    "link"
+  ]}
+/>
+</div>
+
+              <div className="space-y-2">
+                <Label>Blog Images</Label>
+                <BlogImageUploader
+                  images={formData.blog_images}
+                  coverImageUrl={formData.cover_image_url}
+                  onImagesChange={(images) => setFormData(prev => ({ ...prev, blog_images: images }))}
+                  onCoverChange={(url) => setFormData(prev => ({ ...prev, cover_image_url: url }))}
+                />
+              </div>
+
+              {/* FAQ Section */}
+              <div className="space-y-3">
+                <Label className="text-sm font-medium">FAQ</Label>
+                <div className="flex rounded-lg border border-border overflow-hidden w-fit">
+                  <button
+                    type="button"
+                    className={cn(
+                      "px-5 py-2 text-sm font-medium transition-colors",
+                      faqEnabled
+                        ? "bg-primary text-primary-foreground"
+                        : "bg-background text-muted-foreground hover:bg-muted"
+                    )}
+                    onClick={() => {
+                      setFaqEnabled(true);
+                      if (formData.faqs.length === 0) {
+                        setFormData(prev => ({
+                          ...prev,
+                          faqs: [{ question: '', answer: '' }],
+                        }));
+                      }
+                      setCurrentFaqIndex(0);
+                    }}
+                  >
+                    Yes
+                  </button>
+                  <button
+                    type="button"
+                    className={cn(
+                      "px-5 py-2 text-sm font-medium transition-colors",
+                      !faqEnabled
+                        ? "bg-primary text-primary-foreground"
+                        : "bg-background text-muted-foreground hover:bg-muted"
+                    )}
+                    onClick={() => {
+                      setFaqEnabled(false);
+                      setCurrentFaqIndex(0);
+                    }}
+                  >
+                    No
+                  </button>
+                </div>
+
+                {faqEnabled && (
+                  <div className="space-y-4 rounded-lg border border-border bg-muted/30 p-4">
+                    <div className="flex items-center justify-between">
+                      <p className="text-sm text-muted-foreground">
+                        Question {currentFaqIndex + 1} of {Math.max(formData.faqs.length, 1)}
+                        <span className="text-xs ml-2">(Max 3)</span>
+                      </p>
+                      <div className="flex items-center gap-1.5">
+                        {formData.faqs.map((_, i) => (
+                          <button
+                            key={i}
+                            type="button"
+                            onClick={() => setCurrentFaqIndex(i)}
+                            className={cn(
+                              "h-2.5 w-2.5 rounded-full transition-colors",
+                              i === currentFaqIndex ? "bg-primary" : "bg-border hover:bg-muted-foreground"
+                            )}
+                          />
+                        ))}
+                      </div>
+                    </div>
+
+                    <div className="space-y-2">
+                      <Label htmlFor={`faq-q-${currentFaqIndex}`}>
+                        Question {currentFaqIndex + 1}
+                      </Label>
+                      <Input
+                        id={`faq-q-${currentFaqIndex}`}
+                        value={formData.faqs[currentFaqIndex]?.question || ''}
+                        onChange={(e) => {
+                          const newFaqs = [...formData.faqs];
+                          if (!newFaqs[currentFaqIndex]) {
+                            newFaqs[currentFaqIndex] = { question: '', answer: '' };
+                          }
+                          newFaqs[currentFaqIndex] = {
+                            ...newFaqs[currentFaqIndex],
+                            question: e.target.value,
+                          };
+                          setFormData(prev => ({ ...prev, faqs: newFaqs }));
+                        }}
+                        placeholder="Enter your question"
+                      />
+                    </div>
+
+                    <div className="space-y-2">
+                      <Label>Answer {currentFaqIndex + 1}</Label>
+                      <ReactQuill
+                        theme="snow"
+                        value={formData.faqs[currentFaqIndex]?.answer || ''}
+                        onChange={(value) => {
+                          const newFaqs = [...formData.faqs];
+                          if (!newFaqs[currentFaqIndex]) {
+                            newFaqs[currentFaqIndex] = { question: '', answer: '' };
+                          }
+                          newFaqs[currentFaqIndex] = {
+                            ...newFaqs[currentFaqIndex],
+                            answer: value,
+                          };
+                          setFormData(prev => ({ ...prev, faqs: newFaqs }));
+                        }}
+                      />
+                    </div>
+
+                    <div className="flex items-center justify-between pt-3 border-t border-border">
+                      {currentFaqIndex > 0 ? (
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          onClick={() => setCurrentFaqIndex(prev => prev - 1)}
+                        >
+                          Previous
+                        </Button>
+                      ) : (
+                        <div />
+                      )}
+
+                      {currentFaqIndex < 2 ? (
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          onClick={() => {
+                            const nextIndex = currentFaqIndex + 1;
+                            const newFaqs = [...formData.faqs];
+                            if (!newFaqs[nextIndex]) {
+                              newFaqs[nextIndex] = { question: '', answer: '' };
+                            }
+                            setFormData(prev => ({ ...prev, faqs: newFaqs }));
+                            setCurrentFaqIndex(nextIndex);
+                          }}
+                          disabled={
+                            !formData.faqs[currentFaqIndex]?.question?.trim() ||
+                            !formData.faqs[currentFaqIndex]?.answer?.trim() ||
+                            formData.faqs[currentFaqIndex]?.answer === '<p><br></p>'
+                          }
+                        >
+                          Next
+                        </Button>
+                      ) : (
+                        <div />
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Meta Title */}
+<div className="space-y-2">
+  <Label htmlFor="meta_title">Meta Title</Label>
+  <Input
+    id="meta_title"
+    value={formData.meta_title}
+    onChange={(e) =>
+      setFormData(prev => ({
+        ...prev,
+        meta_title: e.target.value,
+      }))
+    }
+    placeholder="Enter meta title"
+  />
+</div>
+
+{/* Meta Description */}
+<div className="space-y-2">
+  <Label htmlFor="meta_description">Meta Description</Label>
+  <Textarea
+    id="meta_description"
+    value={formData.meta_description}
+    onChange={(e) =>
+      setFormData(prev => ({
+        ...prev,
+        meta_description: e.target.value,
+      }))
+    }
+    placeholder="Enter meta description"
+    rows={3}
+  />
+</div>
+
+{/* Canonical URL */}
+<div className="space-y-2">
+  <Label htmlFor="canonical_url">Canonical URL</Label>
+  <Input
+    id="canonical_url"
+    value={formData.canonical_url}
+    onChange={(e) =>
+      setFormData(prev => ({
+        ...prev,
+        canonical_url: e.target.value,
+      }))
+    }
+    placeholder="https://example.com/blog/post"
+  />
+</div>
+
+              <div className="space-y-2">
+                <Label htmlFor="status">Status</Label>
+                <Select
+                  value={formData.status}
+                  onValueChange={(value) => setFormData(prev => ({ ...prev, status: value }))}
+                >
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="draft">Draft</SelectItem>
+                    <SelectItem value="published">Published</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+
+              <div className="flex justify-end gap-2 pt-4">
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => setIsDialogOpen(false)}
+                >
+                  Cancel
+                </Button>
+                <Button
+                  type="submit"
+                  disabled={createBlogMutation.isPending || updateBlogMutation.isPending}
+                >
+                  {editingBlog ? 'Update' : 'Create'} Blog
+                </Button>
+              </div>
+            </form>
+          </DialogContent>
+        </Dialog>
+      </div>
+
+      {/* Stats Cards */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between pb-2">
+            <CardTitle className="text-sm font-medium">Total Posts</CardTitle>
+            <FileText className="h-4 w-4 text-muted-foreground" />
+          </CardHeader>
+          <CardContent>
+            <div className="text-2xl font-bold">{blogs?.length || 0}</div>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between pb-2">
+            <CardTitle className="text-sm font-medium">Published</CardTitle>
+            <Eye className="h-4 w-4 text-muted-foreground" />
+          </CardHeader>
+          <CardContent>
+            <div className="text-2xl font-bold">
+              {blogs?.filter(b => b.status === 'published').length || 0}
+            </div>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between pb-2">
+            <CardTitle className="text-sm font-medium">Drafts</CardTitle>
+            <Pencil className="h-4 w-4 text-muted-foreground" />
+          </CardHeader>
+          <CardContent>
+            <div className="text-2xl font-bold">
+              {blogs?.filter(b => b.status === 'draft').length || 0}
+            </div>
+          </CardContent>
+        </Card>
+      </div>
+
+      {/* Blogs Table */}
+      <Card>
+        <CardHeader>
+          <CardTitle>All Blog Posts</CardTitle>
+        </CardHeader>
+        <CardContent>
+          {isLoading ? (
+            <div className="space-y-4">
+              {[1, 2, 3].map((i) => (
+                <div key={i} className="flex items-center gap-4">
+                  <Skeleton className="h-12 w-12 rounded" />
+                  <div className="flex-1 space-y-2">
+                    <Skeleton className="h-4 w-1/3" />
+                    <Skeleton className="h-3 w-1/4" />
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : blogs && blogs.length > 0 ? (
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Title</TableHead>
+                  <TableHead>Status</TableHead>
+                  <TableHead>Created</TableHead>
+                  <TableHead>Published</TableHead>
+                  <TableHead className="text-right">Actions</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {blogs.map((blog) => (
+                  <TableRow key={blog.id}>
+                    <TableCell>
+                      <div className="flex items-center gap-3">
+                        {blog.cover_image_url ? (
+                          <img
+                            src={blog.cover_image_url}
+                            alt={blog.title}
+                            className="h-10 w-10 object-cover rounded"
+                          />
+                        ) : (
+                          <div className="h-10 w-10 rounded bg-muted flex items-center justify-center">
+                            <FileText className="h-5 w-5 text-muted-foreground" />
+                          </div>
+                        )}
+                        <div>
+                          <p className="font-medium">{blog.title}</p>
+                          <p className="text-sm text-muted-foreground">/{blog.slug}</p>
+                        </div>
+                      </div>
+                    </TableCell>
+                    <TableCell>
+                      <div className="flex items-center gap-1.5">
+                        <Badge variant={blog.status === 'published' ? 'default' : 'secondary'}>
+                          {blog.status}
+                        </Badge>
+                        {blog.faqs && blog.faqs.length > 0 && (
+                          <Badge variant="outline" className="text-xs border-primary/40 text-primary">
+                            FAQ ({blog.faqs.length})
+                          </Badge>
+                        )}
+                      </div>
+                    </TableCell>
+                    <TableCell>
+                      {format(new Date(blog.created_at), 'MMM d, yyyy')}
+                    </TableCell>
+                    <TableCell>
+                      {blog.published_at
+                        ? format(new Date(blog.published_at), 'MMM d, yyyy')
+                        : '-'}
+                    </TableCell>
+                    <TableCell className="text-right">
+                      <div className="flex justify-end gap-2">
+                        {blog.status === 'published' && (
+                          <Button variant="ghost" size="icon" asChild>
+                            <a href={`/blog/${blog.slug}`} target="_blank" rel="noopener noreferrer">
+                              <Eye className="h-4 w-4" />
+                            </a>
+                          </Button>
+                        )}
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          onClick={() => handleOpenDialog(blog)}
+                        >
+                          <Pencil className="h-4 w-4" />
+                        </Button>
+                        <AlertDialog>
+                          <AlertDialogTrigger asChild>
+                            <Button variant="ghost" size="icon">
+                              <Trash2 className="h-4 w-4 text-destructive" />
+                            </Button>
+                          </AlertDialogTrigger>
+                          <AlertDialogContent>
+                            <AlertDialogHeader>
+                              <AlertDialogTitle>Delete Blog Post</AlertDialogTitle>
+                              <AlertDialogDescription>
+                                Are you sure you want to delete "{blog.title}"? This action cannot be undone.
+                              </AlertDialogDescription>
+                            </AlertDialogHeader>
+                            <AlertDialogFooter>
+                              <AlertDialogCancel>Cancel</AlertDialogCancel>
+                              <AlertDialogAction
+                                onClick={() => deleteBlogMutation.mutate(blog.id)}
+                                className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                              >
+                                Delete
+                              </AlertDialogAction>
+                            </AlertDialogFooter>
+                          </AlertDialogContent>
+                        </AlertDialog>
+                      </div>
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          ) : (
+            <div className="text-center py-12">
+              <FileText className="h-12 w-12 mx-auto text-muted-foreground mb-4" />
+              <h3 className="text-lg font-semibold text-foreground mb-2">No blog posts yet</h3>
+              <p className="text-muted-foreground mb-4">
+                Create your first blog post to get started.
+              </p>
+              <Button onClick={() => handleOpenDialog()}>
+                <Plus className="mr-2 h-4 w-4" />
+                Create Blog Post
+              </Button>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+    </div>
+  );
+};
+
+export default AdminBlogsPage; 
